@@ -182,8 +182,3 @@ Carol: 1 vote(s)
 - Add **digital signatures** to votes for security.  
 - Implement **more complex consensus protocols** (PBFT, Raft).  
 - Use **persistent storage** for blockchain instead of in-memory objects.
-
----
-
-**End of README**
-
