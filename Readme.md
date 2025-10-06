@@ -65,6 +65,7 @@ To implement a secure, distributed voting system where each MPI process maintain
 Blockchain_Based_VotingSys/
 │
 ├─ blockchain.py        # Blockchain and block definitions
+├─ mpi_test.py          # For testing MPI
 ├─ node.py              # MPI-based voting simulation (CLI)
 ├─ chain_rank_json/     # Output folder for blockchain JSONs
 │   ├─ chain_rank_0.json
