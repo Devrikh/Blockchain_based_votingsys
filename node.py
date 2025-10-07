@@ -1,10 +1,8 @@
+# node.py (Streamlit-only, MPI-safe, non-blocking)
 from mpi4py import MPI
 from blockchain import Blockchain, Block
 from colorama import Fore, Style, init
-import time
-import random
-import json
-import os
+import time, json, os
 
 # Initialize color output
 init(autoreset=True, convert=True)
@@ -14,53 +12,49 @@ rank = comm.Get_rank()
 size = comm.Get_size()
 
 chain = Blockchain()
-NUM_ROUNDS = 5  # Number of consensus rounds
-CANDIDATES = ["Alice", "Bob", "Carol"]
+NUM_ROUNDS = 5
+VOTES_FILE = "pending_votes.json"
 
-# Predefined votes for leaders (one per round)
-predefined_leader_votes = ["Alice", "Bob", "Carol", "Alice", "Bob"]
+# Load votes from Streamlit UI
+def load_ui_votes():
+    if not os.path.exists(VOTES_FILE):
+        return []
+    try:
+        with open(VOTES_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return []
 
-# Folder to store blockchain JSON
-output_folder = "chain_rank_json"
-os.makedirs(output_folder, exist_ok=True)
-
-def get_leader_vote(round_no):
-    """
-    Return a predefined vote for the leader based on the round number.
-    """
-    choice = predefined_leader_votes[round_no % len(predefined_leader_votes)]
-    voter_id = f"L{rank}_R{round_no}"
-    print(Fore.GREEN + f"[Leader {rank}] Vote: {choice} (voter ID: {voter_id})")
-    return {"voter": voter_id, "choice": choice}
+# Clear votes after processing
+def clear_ui_votes():
+    with open(VOTES_FILE, "w") as f:
+        json.dump([], f)
 
 # Main consensus loop
 for round_no in range(NUM_ROUNDS):
     leader = round_no % size
-    time.sleep(random.uniform(0.2, 0.8))  # Network delay simulation
+    time.sleep(0.2)  # simulate network delay
 
     # ---- LEADER NODE ----
     if rank == leader:
-        print(Fore.GREEN + f"[Leader {rank}] Proposing block for round {round_no}")
+        # Load votes
+        ui_votes = load_ui_votes()
+        vote_count = len(ui_votes)
+        if vote_count > 0:
+            print(Fore.GREEN + f"[Leader {rank}] Proposing block for round {round_no} with {vote_count} votes")
+            clear_ui_votes()
+        else:
+            print(Fore.YELLOW + f"[Leader {rank}] No votes submitted this round {round_no}, proposing empty block")
 
-        # Leader vote (predefined)
-        votes = [get_leader_vote(round_no)]
+        # Prepare proposal (can be empty)
+        proposal_data = {"votes": ui_votes, "proposer": leader}
 
-        # Collect votes from other nodes
-        collected_votes = [votes]
-        for i in range(size):
-            if i != rank:
-                data = comm.recv(source=i, tag=round_no)
-                collected_votes.append(data)
-
-        all_votes = [vote for node_votes in collected_votes for vote in node_votes]
-
-        # Broadcast proposal
-        proposal_data = {"votes": all_votes, "proposer": leader}
+        # Broadcast proposal to non-leaders
         for i in range(size):
             if i != rank:
                 comm.send(proposal_data, dest=i, tag=100 + round_no)
 
-        # Collect approvals
+        # Collect approvals from non-leaders
         yes_votes = 1  # leader auto-approves
         for i in range(size):
             if i != rank:
@@ -68,58 +62,59 @@ for round_no in range(NUM_ROUNDS):
                 if resp == "YES":
                     yes_votes += 1
 
-        # Commit block if majority approves
-        if yes_votes > size // 2:
+        # Commit block if majority approves and there are votes
+        if vote_count > 0 and yes_votes > size // 2:
             last_block = chain.chain[-1]
             new_block = Block(index=last_block.index + 1,
                               prev_hash=last_block.hash,
-                              votes=all_votes,
+                              votes=ui_votes,
                               proposer=leader)
             chain.add_block(new_block)
-            print(Fore.YELLOW + f"[Leader {rank}] Block committed with {yes_votes}/{size} approvals")
+            print(Fore.GREEN + f"[Leader {rank}] Block committed ({yes_votes}/{size} approvals)")
+        elif vote_count == 0:
+            print(Fore.YELLOW + f"[Leader {rank}] No votes to commit this round")
         else:
-            print(Fore.RED + f"[Leader {rank}] Block rejected (only {yes_votes}/{size} YES votes)")
+            print(Fore.RED + f"[Leader {rank}] Block rejected ({yes_votes}/{size})")
 
     # ---- NON-LEADER NODES ----
     else:
-        # Generate random vote for this node
-        votes = [{"voter": f"V{rank}_R{round_no}", "choice": random.choice(CANDIDATES)}]
-        comm.send(votes, dest=leader, tag=round_no)
-
-        # Receive block proposal from leader
+        # Receive proposal
         proposal = comm.recv(source=leader, tag=100 + round_no)
-        time.sleep(random.uniform(0.2, 0.5))
 
-        # Randomly approve/reject
-        decision = random.choice(["YES", "YES", "NO"])
+        # Decide approval
+        if not proposal["votes"]:
+            decision = "NO"  # no votes, cannot commit
+        else:
+            decision = "YES"  # approve all UI votes
+
+        # Send decision back to leader
         comm.send(decision, dest=leader, tag=200 + round_no)
 
-        if decision == "YES":
+        # Commit block locally if approved and votes exist
+        if proposal["votes"] and decision == "YES":
             last_block = chain.chain[-1]
             new_block = Block(index=last_block.index + 1,
                               prev_hash=last_block.hash,
                               votes=proposal["votes"],
                               proposer=proposal["proposer"])
             chain.add_block(new_block)
-            print(Fore.CYAN + f"[Node {rank}] Block committed!")
-        else:
-            print(Fore.MAGENTA + f"[Node {rank}] Block rejected proposal from Leader {leader}")
+            print(Fore.CYAN + f"[Node {rank}] Block committed")
+        elif not proposal["votes"]:
+            print(Fore.MAGENTA + f"[Node {rank}] No proposal votes, skipping commit")
 
-    time.sleep(random.uniform(0.3, 0.7))
+    time.sleep(0.2)
 
-# ---- END OF ROUNDS ----
+# End of rounds
 time.sleep(1)
-
-# Final blockchain display
 if rank == 0:
     print(Style.BRIGHT + "\n=== Final Blockchain ===")
     for block in chain.chain:
         print(f"Block {block.index}: proposer={block.proposer}, votes={len(block.votes)}")
-
-    # Print vote counts per candidate
     chain.print_results()
 
-# Export blockchain JSON
+# Save blockchain to JSON for each node
+output_folder = "chain_rank_json"
+os.makedirs(output_folder, exist_ok=True)
 output_filename = os.path.join(output_folder, f"chain_rank_{rank}.json")
 with open(output_filename, "w") as f:
     json.dump([b.__dict__ for b in chain.chain], f, indent=4)
