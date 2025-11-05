@@ -1,4 +1,4 @@
-# node.py — Live Blockchain Node (with Flask RPC + MPI)
+# node.py — Live Blockchain Node (with Flask RPC + MPI, synchronized timestamps)
 from flask import Flask, request, jsonify
 from mpi4py import MPI
 from blockchain import Blockchain, Block
@@ -8,6 +8,7 @@ import json
 import os
 import signal
 import sys
+from datetime import datetime
 
 # ------------------------------
 # MPI + Flask Setup
@@ -31,7 +32,7 @@ def receive_vote():
     """Receive new vote via REST"""
     vote_data = request.get_json()
     pending_votes.append(vote_data)
-    print(f"[Node {rank}] Received vote: {vote_data}")
+    print(f"[Node {rank}] Received vote: {vote_data}", flush=True)
     return jsonify({"status": "Vote received", "node": rank}), 200
 
 
@@ -52,43 +53,72 @@ def get_pending():
 # ------------------------------
 def consensus_loop():
     global running
-    print(f"[Node {rank}] Consensus loop started")
+    print(f"[Node {rank}] Consensus loop started", flush=True)
 
     while running:
         leader = int(time.time() // 10) % size  # Rotate leader every 10 seconds
         time.sleep(1)
 
         # ---- Leader node proposes block ----
-        if rank == leader and pending_votes:
-            print(f"\n[Leader {rank}] Pr    oposing block with {len(pending_votes)} votes...")
+        if rank == leader:
+            if not pending_votes:
+                print(f"[Leader {rank}] No new votes to propose", flush=True)
+                comm.bcast(None, root=leader)
+                continue
 
+            print(f"\n[Leader {rank}] Proposing block with {len(pending_votes)} votes...", flush=True)
+
+            # Leader creates block with a fixed timestamp
+            timestamp = str(datetime.now())
             new_block = Block(
                 index=len(chain.chain),
                 prev_hash=chain.chain[-1].hash,
                 votes=pending_votes.copy(),
                 proposer=rank
             )
-            pending_votes.clear()
+            new_block.timestamp = timestamp
+            new_block.hash = new_block.calculate_hash()
 
-            comm.bcast(new_block.__dict__, root=leader)
+            proposal_data = {
+                "index": new_block.index,
+                "prev_hash": new_block.prev_hash,
+                "votes": new_block.votes,
+                "proposer": new_block.proposer,
+                "timestamp": new_block.timestamp,
+                "hash": new_block.hash,
+            }
+
+            # Broadcast block to others
+            comm.bcast(proposal_data, root=leader)
             chain.add_block(new_block)
-            print(f"[Leader {rank}] Broadcasted and added Block #{new_block.index}")
+            pending_votes.clear()
+            print(f"[Leader {rank}] Broadcasted and added Block #{new_block.index}", flush=True)
 
         # ---- Non-leader nodes receive block ----
         else:
             proposal = comm.bcast(None, root=leader)
             if proposal:
                 new_block = Block(
-                    index=proposal['index'],
-                    prev_hash=proposal['prev_hash'],
-                    votes=proposal['votes'],
-                    proposer=proposal['proposer']
+                    index=proposal["index"],
+                    prev_hash=proposal["prev_hash"],
+                    votes=proposal["votes"],
+                    proposer=proposal["proposer"]
                 )
-                if new_block.prev_hash == chain.chain[-1].hash:
-                    chain.add_block(new_block)
-                    print(f"[Node {rank}] Added Block #{new_block.index} from leader {leader}")
+                new_block.timestamp = proposal["timestamp"]
+                new_block.hash = proposal["hash"]
 
-        # ---- Save periodically ----
+                if new_block.prev_hash == chain.chain[-1].hash:
+                    if new_block.hash == new_block.calculate_hash():
+                        chain.add_block(new_block)
+                        print(f"[Node {rank}] Added Block #{new_block.index} from Leader {leader}", flush=True)
+                    else:
+                        print(f"[Node {rank}] Rejected block from Leader {leader} (hash mismatch)", flush=True)
+                else:
+                    print(f"[Node {rank}] Rejected block from Leader {leader} (invalid link)", flush=True)
+            else:
+                print(f"[Node {rank}] No proposal this round from Leader {leader}", flush=True)
+
+        # ---- Periodic save ----
         if int(time.time()) % 10 == 0:
             os.makedirs("chain_rank_json", exist_ok=True)
             with open(f"chain_rank_json/chain_rank_{rank}.json", "w") as f:
@@ -104,7 +134,7 @@ def start_flask():
 
 def signal_handler(sig, frame):
     global running
-    print(f"\n[Node {rank}] Shutting down...")
+    print(f"\n[Node {rank}] Shutting down...", flush=True)
     running = False
     sys.exit(0)
 
@@ -122,8 +152,8 @@ if __name__ == '__main__':
     # Give Flask time to start
     time.sleep(2)
 
-    print(f"[Node {rank}] Started on port {5000 + rank}")
-    print(f"[Node {rank}] Listening for incoming votes...")
+    print(f"[Node {rank}] Started on port {5000 + rank}", flush=True)
+    print(f"[Node {rank}] Listening for incoming votes...", flush=True)
 
     # Start consensus loop
     consensus_loop()
