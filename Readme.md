@@ -122,10 +122,10 @@ colorama
 ```
 ---
 ## 8. Advantages
-■ Realistic hybrid design (Flask + MPI)
-■ Distributed ledger replication
-■ Fault-tolerant consensus model
-■ Modular and extendable (easy to add UI, storage, or cryptography)
+- Realistic hybrid design (Flask + MPI)
+- Distributed ledger replication
+- Fault-tolerant consensus model
+- Modular and extendable (easy to add UI, storage, or cryptography)
 ---
 ## 9. Future Enhancements
 - Add **digital signatures** for secure vote verification
