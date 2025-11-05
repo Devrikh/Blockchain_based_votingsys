@@ -113,7 +113,7 @@ Each node’s blockchain is saved in:
 chain_rank_json/chain_rank_.json
 ```
 ---
-## 7. requirements.txt Example
+## 7. `requirements.txt` Example
 ```txt
 mpi4py
 flask
