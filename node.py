@@ -1,123 +1,129 @@
-# node.py (Streamlit-only, MPI-safe, non-blocking)
+# node.py — Live Blockchain Node (with Flask RPC + MPI)
+from flask import Flask, request, jsonify
 from mpi4py import MPI
 from blockchain import Blockchain, Block
-from colorama import Fore, Style, init
-import time, json, os
+import threading
+import time
+import json
+import os
+import signal
+import sys
 
-# Initialize color output
-init(autoreset=True, convert=True)
-
+# ------------------------------
+# MPI + Flask Setup
+# ------------------------------
+app = Flask(__name__)
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
+# Global state
 chain = Blockchain()
-NUM_ROUNDS = 5
-VOTES_FILE = "pending_votes.json"
+pending_votes = []
+running = True
 
-# Load votes from Streamlit UI
-def load_ui_votes():
-    if not os.path.exists(VOTES_FILE):
-        return []
-    try:
-        with open(VOTES_FILE, "r") as f:
-            return json.load(f)
-    except:
-        return []
 
-# Clear votes after processing
-def clear_ui_votes():
-    with open(VOTES_FILE, "w") as f:
-        json.dump([], f)
+# ------------------------------
+# Flask Endpoints (RPC)
+# ------------------------------
+@app.route('/vote', methods=['POST'])
+def receive_vote():
+    """Receive new vote via REST"""
+    vote_data = request.get_json()
+    pending_votes.append(vote_data)
+    print(f"[Node {rank}] Received vote: {vote_data}")
+    return jsonify({"status": "Vote received", "node": rank}), 200
 
-# Main consensus loop
-for round_no in range(NUM_ROUNDS):
-    leader = round_no % size
-    time.sleep(0.2)  # simulate network delay
 
-    # ---- LEADER NODE ----
-    if rank == leader:
-        # Load votes
-        ui_votes = load_ui_votes()
-        vote_count = len(ui_votes)
-        if vote_count > 0:
-            print(Fore.GREEN + f"[Leader {rank}] Proposing block for round {round_no} with {vote_count} votes")
-            clear_ui_votes()
-        else:
-            print(Fore.YELLOW + f"[Leader {rank}] No votes submitted this round {round_no}, proposing empty block")
+@app.route('/chain', methods=['GET'])
+def get_chain():
+    """Return blockchain"""
+    return jsonify([b.__dict__ for b in chain.chain]), 200
 
-        # Prepare proposal (can be empty)
-        proposal_data = {"votes": ui_votes, "proposer": leader}
 
-        # Broadcast proposal to non-leaders
-        for i in range(size):
-            if i != rank:
-                comm.send(proposal_data, dest=i, tag=100 + round_no)
+@app.route('/pending', methods=['GET'])
+def get_pending():
+    """Return pending votes"""
+    return jsonify(pending_votes), 200
 
-        # Collect approvals from non-leaders
-        yes_votes = 1  # leader auto-approves
-        for i in range(size):
-            if i != rank:
-                resp = comm.recv(source=i, tag=200 + round_no)
-                if resp == "YES":
-                    yes_votes += 1
 
-        # Commit block if majority approves and there are votes
-        if vote_count > 0 and yes_votes > size // 2:
-            last_block = chain.chain[-1]
-            new_block = Block(index=last_block.index + 1,
-                              prev_hash=last_block.hash,
-                              votes=ui_votes,
-                              proposer=leader)
+# ------------------------------
+# Consensus Loop (Rotating Leader)
+# ------------------------------
+def consensus_loop():
+    global running
+    print(f"[Node {rank}] Consensus loop started")
+
+    while running:
+        leader = int(time.time() // 10) % size  # Rotate leader every 10 seconds
+        time.sleep(1)
+
+        # ---- Leader node proposes block ----
+        if rank == leader and pending_votes:
+            print(f"\n[Leader {rank}] Pr    oposing block with {len(pending_votes)} votes...")
+
+            new_block = Block(
+                index=len(chain.chain),
+                prev_hash=chain.chain[-1].hash,
+                votes=pending_votes.copy(),
+                proposer=rank
+            )
+            pending_votes.clear()
+
+            comm.bcast(new_block.__dict__, root=leader)
             chain.add_block(new_block)
-            print(Fore.GREEN + f"[Leader {rank}] Block committed ({yes_votes}/{size} approvals)")
-        elif vote_count == 0:
-            print(Fore.YELLOW + f"[Leader {rank}] No votes to commit this round")
+            print(f"[Leader {rank}] Broadcasted and added Block #{new_block.index}")
+
+        # ---- Non-leader nodes receive block ----
         else:
-            print(Fore.RED + f"[Leader {rank}] Block rejected ({yes_votes}/{size})")
+            proposal = comm.bcast(None, root=leader)
+            if proposal:
+                new_block = Block(
+                    index=proposal['index'],
+                    prev_hash=proposal['prev_hash'],
+                    votes=proposal['votes'],
+                    proposer=proposal['proposer']
+                )
+                if new_block.prev_hash == chain.chain[-1].hash:
+                    chain.add_block(new_block)
+                    print(f"[Node {rank}] Added Block #{new_block.index} from leader {leader}")
 
-    # ---- NON-LEADER NODES ----
-    else:
-        # Receive proposal
-        proposal = comm.recv(source=leader, tag=100 + round_no)
+        # ---- Save periodically ----
+        if int(time.time()) % 10 == 0:
+            os.makedirs("chain_rank_json", exist_ok=True)
+            with open(f"chain_rank_json/chain_rank_{rank}.json", "w") as f:
+                json.dump([b.__dict__ for b in chain.chain], f, indent=4)
 
-        # Decide approval
-        if not proposal["votes"]:
-            decision = "NO"  # no votes, cannot commit
-        else:
-            decision = "YES"  # approve all UI votes
 
-        # Send decision back to leader
-        comm.send(decision, dest=leader, tag=200 + round_no)
+# ------------------------------
+# Threading & Shutdown
+# ------------------------------
+def start_flask():
+    app.run(host='0.0.0.0', port=5000 + rank, debug=False, use_reloader=False)
 
-        # Commit block locally if approved and votes exist
-        if proposal["votes"] and decision == "YES":
-            last_block = chain.chain[-1]
-            new_block = Block(index=last_block.index + 1,
-                              prev_hash=last_block.hash,
-                              votes=proposal["votes"],
-                              proposer=proposal["proposer"])
-            chain.add_block(new_block)
-            print(Fore.CYAN + f"[Node {rank}] Block committed")
-        elif not proposal["votes"]:
-            print(Fore.MAGENTA + f"[Node {rank}] No proposal votes, skipping commit")
 
-    time.sleep(0.2)
+def signal_handler(sig, frame):
+    global running
+    print(f"\n[Node {rank}] Shutting down...")
+    running = False
+    sys.exit(0)
 
-# End of rounds
-time.sleep(1)
-if rank == 0:
-    print(Style.BRIGHT + "\n=== Final Blockchain ===")
-    for block in chain.chain:
-        print(f"Block {block.index}: proposer={block.proposer}, votes={len(block.votes)}")
-    chain.print_results()
 
-# Save blockchain to JSON for each node
-output_folder = "chain_rank_json"
-os.makedirs(output_folder, exist_ok=True)
-output_filename = os.path.join(output_folder, f"chain_rank_{rank}.json")
-with open(output_filename, "w") as f:
-    json.dump([b.__dict__ for b in chain.chain], f, indent=4)
-print(Fore.MAGENTA + f"[Node {rank}] Blockchain saved to {output_filename}")
+# ------------------------------
+# Main
+# ------------------------------
+if __name__ == '__main__':
+    signal.signal(signal.SIGINT, signal_handler)
 
-MPI.Finalize()
+    # Run Flask server in background thread
+    flask_thread = threading.Thread(target=start_flask, daemon=True)
+    flask_thread.start()
+
+    # Give Flask time to start
+    time.sleep(2)
+
+    print(f"[Node {rank}] Started on port {5000 + rank}")
+    print(f"[Node {rank}] Listening for incoming votes...")
+
+    # Start consensus loop
+    consensus_loop()
