@@ -1,4 +1,3 @@
-# node.py — Live Blockchain Node (with Flask RPC + MPI, synchronized timestamps)
 from flask import Flask, request, jsonify
 from mpi4py import MPI
 from blockchain import Blockchain, Block
@@ -10,65 +9,71 @@ import signal
 import sys
 from datetime import datetime
 
-# ------------------------------
 # MPI + Flask Setup
-# ------------------------------
 app = Flask(__name__)
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
-# Global state
 chain = Blockchain()
 pending_votes = []
 running = True
-
+round_no = 0
+MAJORITY = lambda n: (n // 2) + 1
 
 # ------------------------------
-# Flask Endpoints (RPC)
+# Flask Endpoints
 # ------------------------------
 @app.route('/vote', methods=['POST'])
 def receive_vote():
-    """Receive new vote via REST"""
     vote_data = request.get_json()
+    if not isinstance(vote_data, dict) or "voter" not in vote_data or "choice" not in vote_data:
+        return jsonify({"error": "Invalid vote format"}), 400
+
+    if "timestamp" not in vote_data:
+        vote_data["timestamp"] = str(datetime.now())
+
     pending_votes.append(vote_data)
     print(f"[Node {rank}] Received vote: {vote_data}", flush=True)
     return jsonify({"status": "Vote received", "node": rank}), 200
 
-
 @app.route('/chain', methods=['GET'])
 def get_chain():
-    """Return blockchain"""
     return jsonify([b.__dict__ for b in chain.chain]), 200
-
 
 @app.route('/pending', methods=['GET'])
 def get_pending():
-    """Return pending votes"""
     return jsonify(pending_votes), 200
 
+@app.route('/results', methods=['GET'])
+def results():
+    tally = chain.count_votes()
+    resp = {
+        "node": rank,
+        "blocks": len(chain.chain),
+        "votes_total": sum(tally.values()) if tally else 0,
+        "tally": tally,
+        "latest_block": chain.chain[-1].__dict__ if chain.chain else None
+    }
+    return jsonify(resp), 200
 
 # ------------------------------
-# Consensus Loop (Rotating Leader)
+# Consensus Loop
 # ------------------------------
 def consensus_loop():
-    global running
-    print(f"[Node {rank}] Consensus loop started", flush=True)
+    global running, round_no
+    print(f"[Node {rank}] Consensus loop started (size={size})", flush=True)
 
     while running:
-        leader = int(time.time() // 10) % size  # Rotate leader every 10 seconds
+        leader = round_no % size
         time.sleep(1)
 
-        # ---- Leader node proposes block ----
         if rank == leader:
             if not pending_votes:
-                print(f"[Leader {rank}] No new votes to propose", flush=True)
                 comm.bcast(None, root=leader)
+                round_no += 1
                 continue
 
-            print(f"\n[Leader {rank}] Proposing block with {len(pending_votes)} votes...", flush=True)
-
-            # Leader creates block with a fixed timestamp
             timestamp = str(datetime.now())
             new_block = Block(
                 index=len(chain.chain),
@@ -86,58 +91,99 @@ def consensus_loop():
                 "proposer": new_block.proposer,
                 "timestamp": new_block.timestamp,
                 "hash": new_block.hash,
+                "round": round_no
             }
 
-            # Broadcast block to others
             comm.bcast(proposal_data, root=leader)
-            chain.add_block(new_block)
-            pending_votes.clear()
-            print(f"[Leader {rank}] Broadcasted and added Block #{new_block.index}", flush=True)
 
-        # ---- Non-leader nodes receive block ----
+            yes_count = 1
+            for src in range(size):
+                if src == rank:
+                    continue
+                try:
+                    resp = comm.recv(source=src, tag=200 + round_no)
+                    if isinstance(resp, dict) and resp.get("round") == round_no and resp.get("vote") == "YES":
+                        yes_count += 1
+                except Exception as e:
+                    print(f"[Leader {rank}] Error receiving approval from {src}: {e}", flush=True)
+
+            if yes_count >= MAJORITY(size):
+                commit_payload = {"commit": True, "block": proposal_data, "round": round_no}
+                chain.add_block(new_block)
+                pending_votes.clear()
+                print(f"[Leader {rank}] Block committed locally as #{new_block.index} (round {round_no})", flush=True)
+                save_chain_to_json()
+            else:
+                commit_payload = {"commit": False, "reason": "not enough approvals", "round": round_no}
+                print(f"[Leader {rank}] Block rejected ({yes_count}/{size} approvals) (round {round_no})", flush=True)
+
+            comm.bcast(commit_payload, root=leader)
+            round_no += 1
+
         else:
             proposal = comm.bcast(None, root=leader)
-            if proposal:
-                new_block = Block(
-                    index=proposal["index"],
-                    prev_hash=proposal["prev_hash"],
-                    votes=proposal["votes"],
-                    proposer=proposal["proposer"]
+            if not proposal:
+                round_no += 1
+                continue
+
+            valid_link = (proposal["prev_hash"] == chain.chain[-1].hash)
+            candidate = Block(
+                index=proposal["index"],
+                prev_hash=proposal["prev_hash"],
+                votes=proposal["votes"],
+                proposer=proposal["proposer"]
+            )
+            candidate.timestamp = proposal["timestamp"]
+            valid_hash = (candidate.calculate_hash() == proposal["hash"])
+
+            vote_decision = "YES" if (valid_link and valid_hash) else "NO"
+            comm.send({"round": proposal.get("round", round_no), "vote": vote_decision, "node": rank}, dest=leader, tag=200 + proposal.get("round", round_no))
+            print(f"[Node {rank}] Sent {vote_decision} to Leader {leader} (round {proposal.get('round', round_no)})", flush=True)
+
+            commit_payload = comm.bcast(None, root=leader)
+            if commit_payload.get("commit"):
+                blk = commit_payload["block"]
+                follower_block = Block(
+                    index=blk["index"],
+                    prev_hash=blk["prev_hash"],
+                    votes=blk["votes"],
+                    proposer=blk["proposer"]
                 )
-                new_block.timestamp = proposal["timestamp"]
-                new_block.hash = proposal["hash"]
+                follower_block.timestamp = blk["timestamp"]
+                follower_block.hash = blk["hash"]
 
-                if new_block.prev_hash == chain.chain[-1].hash:
-                    if new_block.hash == new_block.calculate_hash():
-                        chain.add_block(new_block)
-                        print(f"[Node {rank}] Added Block #{new_block.index} from Leader {leader}", flush=True)
-                    else:
-                        print(f"[Node {rank}] Rejected block from Leader {leader} (hash mismatch)", flush=True)
+                if follower_block.prev_hash == chain.chain[-1].hash and follower_block.hash == follower_block.calculate_hash():
+                    chain.add_block(follower_block)
+                    print(f"[Node {rank}] Added Block #{follower_block.index} from Leader {leader} (round {commit_payload.get('round')})", flush=True)
+                    save_chain_to_json()
                 else:
-                    print(f"[Node {rank}] Rejected block from Leader {leader} (invalid link)", flush=True)
+                    print(f"[Node {rank}] Failed to add block from Leader {leader} — validation failed", flush=True)
             else:
-                print(f"[Node {rank}] No proposal this round from Leader {leader}", flush=True)
+                print(f"[Node {rank}] Leader {leader} aborted commit (round {commit_payload.get('round')}): {commit_payload.get('reason')}", flush=True)
 
-        # ---- Periodic save ----
-        if int(time.time()) % 10 == 0:
-            os.makedirs("chain_rank_json", exist_ok=True)
-            with open(f"chain_rank_json/chain_rank_{rank}.json", "w") as f:
-                json.dump([b.__dict__ for b in chain.chain], f, indent=4)
-
+            round_no += 1
 
 # ------------------------------
-# Threading & Shutdown
+# Flask & Shutdown
 # ------------------------------
 def start_flask():
+    import logging
+    logging.getLogger('werkzeug').setLevel(logging.ERROR)
     app.run(host='0.0.0.0', port=5000 + rank, debug=False, use_reloader=False)
-
 
 def signal_handler(sig, frame):
     global running
-    print(f"\n[Node {rank}] Shutting down...", flush=True)
     running = False
     sys.exit(0)
 
+def save_chain_to_json():
+    os.makedirs("chain_rank_json", exist_ok=True)
+    try:
+        with open(f"chain_rank_json/chain_rank_{rank}.json", "w") as f:
+            json.dump([b.__dict__ for b in chain.chain], f, indent=4)
+        print(f"[Node {rank}] Blockchain saved to chain_rank_{rank}.json", flush=True)
+    except Exception as e:
+        print(f"[Node {rank}] Error saving chain JSON: {e}", flush=True)
 
 # ------------------------------
 # Main
@@ -145,15 +191,8 @@ def signal_handler(sig, frame):
 if __name__ == '__main__':
     signal.signal(signal.SIGINT, signal_handler)
 
-    # Run Flask server in background thread
-    flask_thread = threading.Thread(target=start_flask, daemon=True)
-    flask_thread.start()
-
-    # Give Flask time to start
+    threading.Thread(target=start_flask, daemon=True).start()
     time.sleep(2)
 
-    print(f"[Node {rank}] Started on port {5000 + rank}", flush=True)
-    print(f"[Node {rank}] Listening for incoming votes...", flush=True)
-
-    # Start consensus loop
+    print(f"[Node {rank}] Flask server started on port {5000 + rank}", flush=True)
     consensus_loop()

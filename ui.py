@@ -4,7 +4,7 @@ import requests
 import json
 from datetime import datetime
 
-# --- Node Config ---
+# --- Node Configuration ---
 NODES = [
     "http://127.0.0.1:5000",
     "http://127.0.0.1:5001",
@@ -15,11 +15,10 @@ NODES = [
 CANDIDATES = ["Alice", "Bob", "Carol"]
 
 st.set_page_config(page_title="Blockchain Voting System", page_icon="🗳", layout="centered")
-
 st.title("🗳 Secure Distributed Voting System")
-st.subheader("Cast your vote on the live blockchain network")
+st.subheader("Cast your vote and view real-time blockchain status")
 
-# --- Select Node ---
+# --- Node Selection for Vote Submission ---
 selected_node = st.selectbox("Select a node to submit your vote", NODES)
 
 # --- Voting Section ---
@@ -35,35 +34,59 @@ if st.button("Submit Vote"):
             "choice": choice,
             "timestamp": str(datetime.now())
         }
-
         try:
-            response = requests.post(f"{selected_node}/vote", json=vote)
-            if response.status_code == 200:
+            resp = requests.post(f"{selected_node}/vote", json=vote, timeout=3)
+            if resp.status_code == 200:
                 st.success(f"✅ Vote for {choice} submitted successfully to {selected_node}")
             else:
-                st.error(f"❌ Failed to submit vote: {response.text}")
+                st.error(f"❌ Failed to submit vote: {resp.text}")
         except requests.exceptions.RequestException:
             st.error(f"🚫 Could not connect to {selected_node}. Make sure the node is running.")
 
 st.divider()
-st.subheader("🌐 View Blockchain Data")
 
-if st.button("Fetch Blockchain Data"):
-    try:
-        chains = []
-        for node in NODES:
-            try:
-                resp = requests.get(f"{node}/chain", timeout=2)
-                if resp.status_code == 200:
-                    chain_data = resp.json()
-                    chains.append((node, len(chain_data)))
-            except:
-                continue
-        if chains:
-            st.success("✅ Connected nodes:")
-            for node, blocks in chains:
-                st.write(f"- {node} → {blocks} blocks")
+# --- Live Blockchain Status ---
+st.subheader("🌐 Live Blockchain Status")
+refresh = st.button("Refresh Blockchain Data")
+
+if refresh:
+    chains_info = []
+    results_info = []
+
+    for node in NODES:
+        # --- Fetch Chain Info ---
+        try:
+            chain_resp = requests.get(f"{node}/chain", timeout=2)
+            if chain_resp.status_code == 200:
+                chain_data = chain_resp.json()
+                chains_info.append((node, len(chain_data)))
+        except:
+            chains_info.append((node, "❌ Not reachable"))
+
+        # --- Fetch Voting Results ---
+        try:
+            res_resp = requests.get(f"{node}/results", timeout=2)
+            if res_resp.status_code == 200:
+                res_data = res_resp.json()
+                results_info.append((node, res_data))
+        except:
+            results_info.append((node, {"tally": "❌ Not reachable", "votes_total": 0}))
+
+    # --- Display Node Status ---
+    st.markdown("**Node Blockchain Summary:**")
+    for node, blocks in chains_info:
+        st.write(f"- {node} → {blocks} blocks")
+
+    st.markdown("**Voting Results per Node:**")
+    for node, data in results_info:
+        st.write(f"**Node {node}**")
+        if isinstance(data["tally"], dict):
+            for candidate, count in data["tally"].items():
+                st.write(f"  - {candidate}: {count} vote(s)")
+            st.write(f"  Total votes: {data['votes_total']}")
+            st.write(f"  Latest block index: {data['latest_block']['index'] if data['latest_block'] else 'N/A'}")
         else:
-            st.warning("⚠️ No nodes reachable right now.")
-    except Exception as e:
-        st.error(f"Error fetching data: {e}")
+            st.write(f"  {data['tally']}")
+
+st.divider()
+st.caption("Data fetched live from all running nodes. Refresh to see updates.")
