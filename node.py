@@ -125,11 +125,11 @@ def consensus_loop():
                 commit_msg = {"commit": True, "block": proposal, "round": round_no}
                 chain.add_block(new_block)
                 pending_votes.clear()
-                print(f"[Leader {rank}] ✅ Block #{new_block.index} committed (round {round_no})", flush=True)
+                print(f"[Leader {rank}] Block #{new_block.index} committed (round {round_no})", flush=True)
                 save_chain_to_json()
             else:
                 commit_msg = {"commit": False, "reason": "Not enough approvals", "round": round_no}
-                print(f"[Leader {rank}] ❌ Block rejected ({yes_count}/{size}) (round {round_no})", flush=True)
+                print(f"[Leader {rank}] Block rejected ({yes_count}/{size}) (round {round_no})", flush=True)
 
             comm.bcast(commit_msg, root=leader)
             round_no += 1
@@ -176,10 +176,10 @@ def consensus_loop():
 
                 if follower_block.prev_hash == chain.chain[-1].hash and follower_block.hash == follower_block.calculate_hash():
                     chain.add_block(follower_block)
-                    print(f"[Node {rank}] ✅ Added Block #{follower_block.index} from Leader {leader} (round {commit_msg['round']})", flush=True)
+                    print(f"[Node {rank}] Added Block #{follower_block.index} from Leader {leader} (round {commit_msg['round']})", flush=True)
                     save_chain_to_json()
                 else:
-                    print(f"[Node {rank}] ⚠️ Validation failed — could not add block from Leader {leader}", flush=True)
+                    print(f"[Node {rank}] Validation failed — could not add block from Leader {leader}", flush=True)
             else:
                 print(f"[Node {rank}] Leader {leader} aborted commit (round {commit_msg.get('round')}): {commit_msg.get('reason')}", flush=True)
 
