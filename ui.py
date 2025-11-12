@@ -105,5 +105,25 @@ if refresh:
         else:
             st.write(f"  {data.get('tally')}")
 
+    # ------------------------------
+    # 🏆 Fetch and Show Overall Winner (Node 0)
+    # ------------------------------
+    st.markdown("---")
+    st.subheader("🏆 Winner")
+    try:
+        res_resp = requests.get("http://127.0.0.1:5000/results", timeout=2)
+        if res_resp.status_code == 200:
+            res_data = res_resp.json()
+            tally = res_data.get("tally", {})
+            if tally:
+                winner = max(tally, key=tally.get)
+                st.success(f"🥇 **{winner}** wins with {tally[winner]} vote(s)! 🎉")
+            else:
+                st.info("No votes recorded yet on Node 0.")
+        else:
+            st.error("❌ Could not fetch winner from Node 0.")
+    except Exception:
+        st.error("🚫 Node 0 is not reachable.")
+
 st.divider()
-st.caption("Data fetched live from all running nodes. Click refresh to update.")
+st.caption("Data fetched live from all running nodes. Winner fetched from Node 0.")

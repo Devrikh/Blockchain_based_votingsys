@@ -55,16 +55,22 @@ def get_pending():
 
 @app.route('/results', methods=['GET'])
 def results():
-    """Return current vote tally and blockchain info."""
+    """Return current vote tally, blockchain info, and winner."""
     tally = chain.count_votes()
+    winner = None
+    if tally:
+        winner = max(tally, key=tally.get)
+
     response = {
         "node": rank,
         "blocks": len(chain.chain),
         "votes_total": sum(tally.values()) if tally else 0,
         "tally": tally,
+        "winner": winner,
         "latest_block": chain.chain[-1].__dict__ if chain.chain else None,
     }
     return jsonify(response), 200
+
 
 
 # ------------------------------
