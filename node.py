@@ -208,9 +208,9 @@ def save_chain_to_json():
     os.makedirs("chain_rank_json", exist_ok=True)
     filepath = f"chain_rank_json/chain_rank_{rank}.json"
     try:
-        with open(filepath, "w") as f:
-            json.dump([b.__dict__ for b in chain.chain], f, indent=4)
-        print(f"[Node {rank}] Blockchain saved → {filepath}", flush=True)
+        with open(f"chain_rank_json/chain_rank_{rank}.json", "w", encoding="utf-8") as f:
+            json.dump([b.__dict__ for b in chain.chain], f, indent=4, ensure_ascii=False)
+        print(f"[Node {rank}] Blockchain saved {filepath}", flush=True)
     except Exception as e:
         print(f"[Node {rank}] Error saving blockchain JSON: {e}", flush=True)
 
