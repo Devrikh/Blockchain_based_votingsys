@@ -89,11 +89,11 @@ if refresh:
             results_info.append((node, {"tally": "❌ Not reachable", "votes_total": 0}))
 
     # --- Display summaries ---
-    st.markdown("### 📊 Node Blockchain Summary")
+    st.markdown("### Node Blockchain Summary")
     for node, blocks in chains_info:
         st.write(f"- **{node}** → {blocks} blocks")
 
-    st.markdown("### 🧮 Voting Results per Node")
+    st.markdown("### Voting Results per Node")
     for node, data in results_info:
         st.write(f"**{node}**")
         if isinstance(data.get("tally"), dict):
@@ -110,20 +110,28 @@ if refresh:
     # ------------------------------
     st.markdown("---")
     st.subheader("🏆 Winner")
+
     try:
         res_resp = requests.get("http://127.0.0.1:5000/results", timeout=2)
         if res_resp.status_code == 200:
             res_data = res_resp.json()
             tally = res_data.get("tally", {})
             if tally:
-                winner = max(tally, key=tally.get)
-                st.success(f"🥇 **{winner}** wins with {tally[winner]} vote(s)! 🎉")
+                max_votes = max(tally.values())
+                top_candidates = [c for c, v in tally.items() if v == max_votes]
+
+                if len(top_candidates) == 1:
+                    winner = top_candidates[0]
+                    st.success(f"🥇 **{winner}** wins with {max_votes} vote(s)! 🎉")
+                else:
+                    st.warning(f"It's a draw between **{', '.join(top_candidates)}** — each with {max_votes} vote(s)!")
             else:
-                st.info("No votes recorded yet on Node 0.")
+                st.info("No votes recorded yet on Node.")
         else:
-            st.error("❌ Could not fetch winner from Node 0.")
+            st.error("❌ Could not fetch winner from Node.")
     except Exception:
-        st.error("🚫 Node 0 is not reachable.")
+        st.error("🚫 Node is not reachable.")
+
 
 st.divider()
-st.caption("Data fetched live from all running nodes. Winner fetched from Node 0.")
+st.caption("Data fetched live from all running nodes.")
