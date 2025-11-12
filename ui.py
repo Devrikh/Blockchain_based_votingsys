@@ -49,9 +49,9 @@ if st.button("Submit Vote"):
             if resp.status_code == 200:
                 st.success(f"✅ Vote for '{choice}' submitted successfully to {selected_node}")
             else:
-                st.error(f"❌ Failed to submit vote — {resp.text}")
+                st.error(f"Failed to submit vote — {resp.text}")
         except requests.exceptions.RequestException:
-            st.error(f"🚫 Could not connect to {selected_node}. Make sure the node is running.")
+            st.error(f"Could not connect to {selected_node}. Make sure the node is running.")
 
 st.divider()
 
@@ -73,9 +73,9 @@ if refresh:
                 chain_data = chain_resp.json()
                 chains_info.append((node, len(chain_data)))
             else:
-                chains_info.append((node, f"❌ Error {chain_resp.status_code}"))
+                chains_info.append((node, f"Error {chain_resp.status_code}"))
         except Exception:
-            chains_info.append((node, "❌ Not reachable"))
+            chains_info.append((node, "Not reachable"))
 
         # --- Fetch voting results ---
         try:
@@ -84,9 +84,9 @@ if refresh:
                 res_data = res_resp.json()
                 results_info.append((node, res_data))
             else:
-                results_info.append((node, {"tally": "❌ Error", "votes_total": 0}))
+                results_info.append((node, {"tally": "Error", "votes_total": 0}))
         except Exception:
-            results_info.append((node, {"tally": "❌ Not reachable", "votes_total": 0}))
+            results_info.append((node, {"tally": "Not reachable", "votes_total": 0}))
 
     # --- Display summaries ---
     st.markdown("### Node Blockchain Summary")
@@ -128,9 +128,9 @@ if refresh:
             else:
                 st.info("No votes recorded yet on Node.")
         else:
-            st.error("❌ Could not fetch winner from Node.")
+            st.error("Could not fetch winner from Node.")
     except Exception:
-        st.error("🚫 Node is not reachable.")
+        st.error("Node is not reachable.")
 
 
 st.divider()
