@@ -19,24 +19,24 @@ CANDIDATES = ["Alice", "Bob", "Carol"]
 # Streamlit UI Setup
 # ------------------------------
 st.set_page_config(
-    page_title="🪙 Blockchain Voting System",
+    page_title="Blockchain Voting System",
     page_icon="🪙",
     layout="centered"
 )
 
-st.title("🪙 Secure Distributed Blockchain Voting System")
-st.subheader("Cast your vote and monitor blockchain nodes in real-time")
+st.title("🪙 Secure Distributed Voting System")
+st.subheader("Cast your vote and view real-time blockchain status")
 
 # ------------------------------
-# 🗳 Vote Submission Section
+# Vote Submission Section
 # ------------------------------
-selected_node = st.selectbox("🌐 Select a node to submit your vote", NODES)
-voter_id = st.text_input("👤 Enter Voter ID", placeholder="e.g. V001")
-choice = st.radio("🪙 Choose your candidate", CANDIDATES)
+selected_node = st.selectbox("Select a node to submit your vote", NODES)
+voter_id = st.text_input("Enter Voter ID", placeholder="e.g. V001")
+choice = st.radio("Select your candidate", CANDIDATES)
 
-if st.button("🗳 Submit Vote"):
+if st.button("Submit Vote"):
     if not voter_id.strip():
-        st.warning("⚠️ Please enter your Voter ID before submitting.")
+        st.warning("⚠️ Please enter your Voter ID.")
     else:
         vote = {
             "voter": voter_id.strip(),
@@ -47,26 +47,26 @@ if st.button("🗳 Submit Vote"):
         try:
             resp = requests.post(f"{selected_node}/vote", json=vote, timeout=3)
             if resp.status_code == 200:
-                st.success(f"✅ Vote for '{choice}' successfully recorded on {selected_node}")
+                st.success(f"✅ Vote for '{choice}' submitted successfully to {selected_node}")
             else:
-                st.error(f"❌ Vote submission failed — {resp.text}")
+                st.error(f"❌ Failed to submit vote — {resp.text}")
         except requests.exceptions.RequestException:
-            st.error(f"🚫 Unable to reach {selected_node}. Ensure the node is active.")
+            st.error(f"🚫 Could not connect to {selected_node}. Make sure the node is running.")
 
 st.divider()
 
 # ------------------------------
-# 🪙 Blockchain & Results Display
+# Blockchain & Results Display
 # ------------------------------
-st.subheader("🪙 Live Blockchain Overview")
-refresh = st.button("🔄 Refresh Blockchain Data")
+st.subheader("🌐 Live Blockchain Status")
+refresh = st.button("Refresh Blockchain Data")
 
 if refresh:
     chains_info = []
     results_info = []
 
     for node in NODES:
-        # --- Fetch blockchain data ---
+        # --- Fetch chain info ---
         try:
             chain_resp = requests.get(f"{node}/chain", timeout=2)
             if chain_resp.status_code == 200:
@@ -88,22 +88,22 @@ if refresh:
         except Exception:
             results_info.append((node, {"tally": "❌ Not reachable", "votes_total": 0}))
 
-    # --- Display blockchain summaries ---
-    st.markdown("### 🧱 Node Blockchain Summary")
+    # --- Display summaries ---
+    st.markdown("### 📊 Node Blockchain Summary")
     for node, blocks in chains_info:
         st.write(f"- **{node}** → {blocks} blocks")
 
-    st.markdown("### 🗳 Voting Results per Node")
+    st.markdown("### 🧮 Voting Results per Node")
     for node, data in results_info:
         st.write(f"**{node}**")
         if isinstance(data.get("tally"), dict):
             for candidate, count in data["tally"].items():
                 st.write(f"  - {candidate}: {count} vote(s)")
-            st.write(f"  🧩 Total votes: {data.get('votes_total', 0)}")
+            st.write(f"  Total votes: {data.get('votes_total', 0)}")
             latest = data.get("latest_block")
-            st.write(f"  ⛓️ Latest block index: {latest['index'] if latest else 'N/A'}")
+            st.write(f"  Latest block index: {latest['index'] if latest else 'N/A'}")
         else:
             st.write(f"  {data.get('tally')}")
 
 st.divider()
-st.caption("🪙 Data fetched live from all blockchain nodes. Click refresh to sync the latest updates.")
+st.caption("Data fetched live from all running nodes. Click refresh to update.")
